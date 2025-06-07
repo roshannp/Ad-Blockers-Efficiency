@@ -1,0 +1,90 @@
+1. Set Up Selenium + BrowserMob Proxy to Record HAR Files
+from selenium import webdriver
+from browsermobproxy import Server
+import json
+import time
+
+# Start BrowserMob Proxy
+server = Server("path/to/browsermob-proxy")  # Download from https://bmp.lightbody.net/
+server.start()
+proxy = server.create_proxy()
+
+# Set Chrome options to use proxy
+chrome_options = webdriver.ChromeOptions()
+chrome_options.add_argument(f"--proxy-server={proxy.proxy}")
+
+# Initialize WebDriver
+driver = webdriver.Chrome(options=chrome_options)
+
+# List of websites to test
+websites = [
+    "https://www.cnn.com",
+    "https://www.apple.com",
+    "https://www.amazon.com",
+    # ... up to 100 sites
+]
+
+for site in websites:
+    proxy.new_har(site, options={'captureHeaders': True, 'captureContent': True})
+    driver.get(site)
+    time.sleep(5)  # Wait for full load
+
+    # Save HAR file
+    har_data = proxy.har
+    with open(f"har_files/{site.replace('https://', '').replace('/', '_')}.har", "w") as f:
+        json.dump(har_data, f)
+
+# Cleanup
+driver.quit()
+proxy.stop()
+server.stop()
+2. HAR Parser in Python to Extract Metrics
+import json
+import os
+
+def parse_har_file(filepath):
+    with open(filepath, 'r') as f:
+        har = json.load(f)
+
+    third_party_requests = set()
+    domains = set()
+    durations = []
+    total_time = 0
+
+    for entry in har['log']['entries']:
+        url = entry['request']['url']
+        domain = url.split('/')[2] if '://' in url else url
+        if not domain.endswith("cnn.com"):  # Replace with main domain
+            third_party_requests.add(url)
+            domains.add(domain)
+
+        durations.append(entry['time'])
+        total_time += entry['time']
+
+    metrics = {
+        "third_party_requests": len(third_party_requests),
+        "unique_domains": len(domains),
+        "avg_duration": total_time / len(durations),
+        "95_percentile": sorted(durations)[int(0.95 * len(durations)) - 1]
+    }
+    return metrics
+
+# Loop over all HAR files
+har_dir = "har_files"
+results = []
+for filename in os.listdir(har_dir):
+    filepath = os.path.join(har_dir, filename)
+    metrics = parse_har_file(filepath)
+    results.append(metrics)
+
+print(results)
+3. Summarize Metrics Per Blocker and Browser
+You can organize all result dictionaries into a pandas DataFrame and compute averages:
+
+import pandas as pd
+
+df = pd.DataFrame(results)
+print("Average 3rd-party Requests Blocked:", df['third_party_requests'].mean())
+print("Average Unique Domains:", df['unique_domains'].mean())
+print("Average Request Duration:", df['avg_duration'].mean())
+print("95th Percentile Duration:", df['95_percentile'].mean())
